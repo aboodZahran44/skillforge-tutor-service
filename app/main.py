@@ -1,10 +1,13 @@
 from fastapi import Depends, FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.auth import get_tutor_scope, require_internal_api_key
+from app.chat import stream_tutor_answer
 from app.database import get_db
 from app.ingestion import ingest_lesson
-from app.schemas import LessonIngestRequest
+from app.retrieval import retrieve_relevant_chunks
+from app.schemas import ChatRequest, LessonIngestRequest
 
 app = FastAPI(title="SkillForge Tutor Service")
 
@@ -24,12 +27,24 @@ def ingest_lesson_endpoint(
     return {"chunks_created": chunks_created}
 
 
-@app.get("/courses/{course_id}/ping")
-def tutor_ping(course_id: int, scope: dict = Depends(get_tutor_scope)):
+@app.post("/courses/{course_id}/chat")
+def chat_with_tutor(
+    course_id: int,
+    payload: ChatRequest,
+    db: Session = Depends(get_db),
+    scope: dict = Depends(get_tutor_scope),
+):
     if scope["course_id"] != course_id:
         raise HTTPException(
             status_code=403,
             detail="This token is not scoped to the requested course.",
         )
 
-    return {"ok": True, "course_id": course_id, "user_id": scope["user_id"]}
+    chunks = retrieve_relevant_chunks(db, course_id, payload.question)
+
+    def event_stream():
+        for piece in stream_tutor_answer(chunks, payload.question):
+            yield f"data: {piece}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
