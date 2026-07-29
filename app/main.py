@@ -7,15 +7,28 @@ from app.chat import stream_tutor_answer
 from app.database import get_db
 from app.ingestion import ingest_lesson
 from app.retrieval import retrieve_relevant_chunks
-from app.schemas import ChatRequest, LessonIngestRequest
+from app.schemas import ChatRequest, LessonIngestRequest  
+
+from fastapi.middleware.cors import CORSMiddleware
+
+from sqlalchemy import text
 
 app = FastAPI(title="SkillForge Tutor Service")
 
 
 @app.get("/healthz")
-def health_check():
-    return {"status": "ok"}
+def health_check(db: Session = Depends(get_db)):
+    checks = {}
+    overall_ok = True
 
+    try:
+        db.execute(text("SELECT 1"))
+        checks["database"] = "ok"
+    except Exception as e:
+        checks["database"] = f"error: {e}"
+        overall_ok = False
+
+    return {"status": "ok" if overall_ok else "degraded", "checks": checks}
 
 @app.post("/internal/lessons/ingest")
 def ingest_lesson_endpoint(
